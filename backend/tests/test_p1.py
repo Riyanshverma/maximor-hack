@@ -82,3 +82,64 @@ def test_p1_fails_on_one_cent_imbalance(session):
     assert result.passed is False
     assert result.delta == Decimal("0.01")
     assert result.detail["imbalanced_entries"][0]["entry_id"] == "entry-2"
+
+
+def test_p1_fails_on_currency_mismatch(session):
+    # Debit in USD, Credit in EUR with same numeral (100.00)
+    session.add(
+        JournalEntry(id="entry-curr", run_id=RUN_ID, period=PERIOD, created_by="rule")
+    )
+    session.add(
+        JournalLine(
+            id="entry-curr-debit",
+            entry_id="entry-curr",
+            account_code="1000",
+            debit=Decimal("100.00"),
+            credit=Decimal("0.00"),
+            currency="USD",
+        )
+    )
+    session.add(
+        JournalLine(
+            id="entry-curr-credit",
+            entry_id="entry-curr",
+            account_code="4000",
+            debit=Decimal("0.00"),
+            credit=Decimal("100.00"),
+            currency="EUR",
+        )
+    )
+    session.commit()
+
+    ctx = RunContext(run_id=RUN_ID, period=PERIOD)
+    result = P1DebitCreditBalance().evaluate(ctx, session=session)
+
+    assert result.passed is False
+    assert result.delta > Decimal("0.00")
+    assert any("mixed-currency" in e.get("reason", "") for e in result.detail["imbalanced_entries"])
+
+
+def test_p1_rejects_non_finite_decimal():
+    from backend.app.engine.proofs.p1 import _to_finite_decimal
+
+    with pytest.raises(ValueError, match="Non-finite decimal"):
+        _to_finite_decimal(Decimal("NaN"))
+    with pytest.raises(ValueError, match="Non-finite decimal"):
+        _to_finite_decimal(Decimal("Infinity"))
+    with pytest.raises(ValueError, match="Non-finite decimal"):
+        _to_finite_decimal(Decimal("-Infinity"))
+
+
+def test_p1_formats_deltas_as_strings_in_detail(session):
+    _add_entry(session, "entry-diff", Decimal("100.50"), Decimal("100.00"))
+
+    ctx = RunContext(run_id=RUN_ID, period=PERIOD)
+    result = P1DebitCreditBalance().evaluate(ctx, session=session)
+
+    assert result.passed is False
+    imbalanced = [e for e in result.detail["imbalanced_entries"] if e["entry_id"] == "entry-diff"]
+    assert len(imbalanced) == 1
+    assert isinstance(imbalanced[0]["delta"], str)
+    assert isinstance(imbalanced[0]["debit"], str)
+    assert isinstance(imbalanced[0]["credit"], str)
+
