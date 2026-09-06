@@ -11,9 +11,10 @@ specific steps but never sit on the spine itself. Every path an LLM output takes
 the spine is re-checked by the Proof Engine before anything is allowed to post.
 
 **Tech stack:** Python 3.12 + FastAPI, Postgres (local Docker) via SQLAlchemy 2.0 +
-Alembic, Anthropic Messages API (Opus 5 for investigation, Haiku 4.5 for classification),
-Next.js 15 + Tailwind + shadcn/ui + Recharts, Server-Sent Events for the live run feed,
-Neatlogs SDK for tracing, Dodo Payments test mode as the settlement data source.
+Alembic, sponsor LLM APIs (gpt-5-nano for investigation, GLM-4.7-flash for classification, 
+text-embedding-3-small for semantic search), Next.js 15 + Tailwind + shadcn/ui + Recharts, 
+Server-Sent Events for the live run feed, Neatlogs SDK for tracing, Dodo Payments test mode 
+as the settlement data source.
 
 **Spec:** [`01-chart-of-accounts.md`](01-chart-of-accounts.md),
 [`02-exception-taxonomy.md`](02-exception-taxonomy.md),
@@ -33,6 +34,10 @@ Neatlogs SDK for tracing, Dodo Payments test mode as the settlement data source.
   (`agent` / `human` / `rule`).
 - **The schema and the three contracts (handler, proof, API) freeze at hour 2.** Everything
   after that builds against them without renegotiating.
+- **Official window: September 5, 2026, 9:30 PM IST → September 7, 2026, 3:30 AM IST — 30
+  hours exactly.** All hour offsets below (H0–H30) are relative to that start.
+- **Submission is Devpost, not Discord or GitHub alone** — see [§9](#9-submission-checklist)
+  for the exact required fields and the README content organizers will check.
 
 ---
 
@@ -69,7 +74,7 @@ flowchart LR
 
     M(("Classifier<br/>LLM · Haiku 4.5")) -.informs.-> C
     M -.informs.-> D
-    N(("Investigator<br/>LLM · Opus 5 + tools")) -.informs.-> H
+    N(("Investigator<br/>LLM · gpt-5-nano + tools")) -.informs.-> H
 
     style E fill:#14213D,stroke:#14213D,color:#fff
     style I fill:#14213D,stroke:#14213D,color:#fff
@@ -95,13 +100,13 @@ without being re-checked by arithmetic.
 | **Close Orchestrator** | State machine | Tracks which phase a run is in, moves it forward | Skip a failed proof; close a blocked period |
 | **Ingestor** | Tool | Pulls settlement events from Dodo, bank lines, GL, invoices into one shared shape | Mutate source data |
 | **Matcher** | Deterministic engine | Decomposes a payout into its parts, ties it to a bank deposit | Call a model for any arithmetic |
-| **Classifier** | LLM · Haiku 4.5 | Assigns a GL account to ambiguous events, with a confidence score | Invent an account or an amount |
+| **Classifier** | LLM · GLM-4.7-flash | Assigns a GL account to ambiguous events, with a confidence score | Invent an account or an amount |
 | **JE Composer** | LLM + validator | Drafts journal-entry structure | Post an entry that doesn't balance — a separate validator rejects it first |
 | **Proof Engine** | Deterministic engine | Runs the six proof obligations (P1–P6) | Be overridden by any agent |
-| **Investigator** | LLM · Opus 5 + tools | Forms hypotheses, calls evidence tools, cites a root cause | Edit data; assert an unverified number |
+| **Investigator** | LLM · gpt-5-nano + tools | Forms hypotheses, calls evidence tools, cites a root cause | Edit data; assert an unverified number |
 | **Escalation Router** | Policy engine | A six-condition check decides autonomous-resolve vs. escalate | Auto-approve above materiality |
 | **Judgment Compiler** | LLM + schema check | Turns a human ruling into a versioned, reusable rule | Change a materiality threshold or a proof |
-| **Narrator** | LLM | Writes the close memo in prose | State a figure not sourced from the ledger |
+| **Narrator** | Prose generation (internal or simple API) | Writes the close memo in prose | State a figure not sourced from the ledger |
 
 ### 2.2 Hard invariants
 
@@ -141,21 +146,48 @@ dead network connection.
 | Money | `Decimal` / `NUMERIC(18,4)` |
 | Database | Postgres (local, Docker) |
 | ORM | SQLAlchemy 2.0 + Alembic |
-| Agents | Anthropic Messages API |
-| Investigator | Opus 5 |
-| Classifier | Haiku 4.5 |
 | Frontend | Next.js 15 + Tailwind |
 | Components | shadcn/ui + Recharts |
 | Live feed | Server-Sent Events |
 | Observability | Neatlogs SDK |
 | Data source | Dodo Payments (test mode) |
 
+### Models per pipeline stage
+
+| Stage | Model | Provider | Rationale |
+|---|---|---|---|
+| **Investigator** (exception root-cause) | gpt-5-nano | OpenAI | Reasoning capability for hypothesis formation and evidence citation; reasoning-focused model well-suited for financial investigation |
+| **Classifier** (GL account assignment) | GLM-4.7-flash | TensorMux (OpenAI-compatible) | High-volume, low-stakes classification; free sponsor API (50M tokens); extraction and summarization optimized |
+| **Embeddings** (semantic rule/exception matching) | text-embedding-3-small | OpenAI | Lightweight semantic search for learned-rule reuse and exception archetype matching |
+
 **Why `Decimal`, not `float`:** floating-point numbers cannot represent most decimal
 fractions exactly (`0.1 + 0.2 ≠ 0.3` in binary). One silent rounding error is enough to lose
 a judge's trust in a finance product. Every monetary column is `NUMERIC(18,4)` in Postgres
 and `Decimal` in Python, end to end, serialized to JSON as a *string* — never a number.
 
-### 3.1 API surface
+**Model selection:** This is genuine engineering judgment, not sponsor decoration. Each stage
+uses the model that best fits its constraints: gpt-5-nano for reasoning-intensive exception
+investigation (forming hypotheses and citing evidence), TensorMux GLM-4.7-flash for high-volume
+classification at no cost, and embeddings for semantic matching. All three models come from
+sponsor resources. If a judge asks, cite the stage-specific trade-offs: reasoning depth where it's
+needed (Investigator), bulk efficiency where volume is high (Classifier), and lightweight semantic
+search for learned-rule reuse.
+
+### 3.1 Observability — NeatLogs
+
+**Mechanism:** HTTP trace injection (dependency-free, no SDK).
+
+- **Endpoint:** `POST /v1/trace` to `https://ingest.neatlogs.com/v1/trace`
+- **Transport:** One nested JSON trace tree per close run (success or error), posted on completion
+- **Authentication:** `NEATLOGS_API_KEY` environment variable
+- **Integration point:** Wrap the entire close run (Ingest through Package or exception escalation) in a try/finally; on completion, build one JSON trace tree with the phases as nested spans and POST it. Never post per-span; the endpoint expects one tree per invocation.
+- **Payload shape:** Each span carries `name`, `duration_ms`, `status` (pass/fail), and `attributes` (dict of relevant values: phase name, proof obligations, exception count, rule matches, etc.).
+
+**Why HTTP injection:** Python SDK exists but HTTP is simpler and gives us precise control over the trace tree structure — we POST exactly one tree per run, which maps cleanly to the deterministic state machine phases.
+
+**Demo use:** Capture Run 1 (baseline, many manual interventions) and Run 2 (with learned rules applied). Show the traces side by side: Run 1 will have Investigation → Escalation → Human Ruling → Compile Rule for exceptions; Run 2 will bypass Investigation and go straight to Rule Match → Auto-Resolve. The Neatlogs timeline makes that causal story visible.
+
+### 3.2 API surface
 
 | Endpoint | Purpose |
 |---|---|
@@ -167,7 +199,7 @@ and `Decimal` in Python, end to end, serialized to JSON as a *string* — never 
 | `GET /rules` | Every learned rule, with the ruling that taught it |
 | `GET /runs/{id}/audit-package` | The close memo and its evidence bundle |
 
-Full schema, SSE event shape, and module layout for AO fan-out are in
+Full schema, SSE event shape are in
 [`03-data-model-and-contracts.md`](03-data-model-and-contracts.md).
 
 ---
@@ -321,12 +353,60 @@ anecdote into a measured, isolated effect.
 
 ---
 
-## 7. Build sequence
+## 7. Smallest.ai voice-agent stretch feature
+
+**Scope:** Optional, does not block the core deliverable (M5 cutoff at H20).
+
+**Concept:** A controller uses a hands-free voice interface to query and resolve exceptions while working on other tasks (e.g., during a call, while reviewing other GL accounts).
+
+**Integration point (if time permits after H20):**
+
+1. **Voice query:** Controller says *"TieOut, what exceptions are blocking August's close?"* → Smallest.ai Atoms agent calls a Python webhook endpoint `/voice/query` with the transcribed intent.
+2. **Query handler** → retrieves open exceptions (via the Investigator's existing API) and builds a narrative summary (via the Narrator).
+3. **Voice response** → Atoms agent speaks the summary back (using Waves text-to-speech).
+4. **Voice ruling** (if controller says *"I approve the merchant fee adjustment"*) → captures the decision, calls `POST /exceptions/{id}/resolve` with a rationale generated from the voice context.
+
+**Implementation sketch (if time permits):**
+
+```python
+# Configuration
+SMALLEST_API_KEY = os.getenv("SMALLEST_API_KEY")
+config = Configuration(access_token=SMALLEST_API_KEY)
+atoms_client = AtomsClient(config)
+
+# Create agent once
+agent_request = {
+    "name": "TieOut Controller Assistant",
+    "description": "Hands-free voice interface for querying and resolving settlement exceptions",
+    "language": {"enabled": "en", "switching": False},
+    "synthesizer": {
+        "voiceConfig": {"model": "waves_lightning_large", "voiceId": "nyah"},
+        "speed": 1.1,
+        "consistency": 0.5,
+        "similarity": 0.0,
+        "enhancement": 1
+    },
+    "slmModel": "electron"
+}
+agent_id = atoms_client.create_agent(create_agent_request=agent_request).data
+
+# For each call: agent transcribes voice, calls webhook
+# POST /voice/query receives transcribed intent → returns narrative summary
+# Atoms agent speaks the summary back
+```
+
+**Why this and not something else:** Most voice-agent hackathon demos are generic chatbots. This one is domain-specific (settlement exceptions), time-boxed (H20+ only), and defensible as a force-multiplier for a human controller in a time-pressured close. It doesn't add to the core claim ("proof-carrying close + learning") but amplifies the *usability* claim.
+
+**If you don't get to it:** Do not ship a stub. The core deliverable is complete at H20. A voice agent that half-works is worse than no voice agent at all. Leave the documentation but mark it as a "planned but not implemented" stretch.
+
+---
+
+## 8. Build sequence
 
 The order below exists because of one dependency: nothing downstream can be built until the
 schema and the three contracts (handler, proof, API) are frozen. Once frozen, the six
 proofs and fourteen exception handlers are independent of each other — that's what lets two
-people, or a fleet of parallel AO coding agents, build them at the same time.
+people build them at the same time.
 
 ### Phase 1 — Freeze the contract
 **Hours 0–2 · both developers**
@@ -338,12 +418,15 @@ converting that spec into a running migration + typed interfaces, not designing 
 scratch). Nothing here should change again without both people agreeing — every hour after
 this depends on it not moving.
 
+Run this phase with both developers present — the contract is the one artifact that must 
+not fork.
+
 **Definition of done:** `alembic upgrade head` runs clean against a fresh Postgres; the
 `ExceptionHandler` and `ProofObligation` protocols are importable stub modules; both
 developers have read and agreed to the frozen contract.
 
 ### Phase 2 — Get real, provable data flowing
-**Hours 2–6**
+**Hours 2–6 · one developer**
 
 Confirm Dodo test mode actually produces a payout that can be pulled through
 `GET /payouts/{id}/breakup`. Build the generator that plants known exceptions into two
@@ -354,24 +437,31 @@ each.
 exception manifest lists every exception type, its period, and its expected resolution.
 
 ### Phase 3 — Build the part that can't be faked: the six proofs
-**Hours 6–11 · runs in parallel**
+**Hours 6–11 · parallel work**
 
 Each proof (P1–P6) is a small, pure function with no model call — this is the trust
 foundation, so it's built and tested before anything that depends on it. In parallel: the
 payout decomposition (Matcher) and the bank tie-out.
 
+**Work in parallel:** Each proof obligation gets its own branch against the frozen
+`ProofObligation` interface. Each proof's only job is to make its unit tests pass.
+
 **Definition of done:** a clean period proves to $0.00 on all six obligations; each proof
-has a unit test with a deliberate off-by-one-cent case.
+has a unit test with a deliberate off-by-one-cent case; six PRs merged behind the golden test suite.
 
 ### Phase 4 — Teach it to notice problems
-**Hours 11–16 · runs in parallel**
+**Hours 11–16 · parallel work**
 
 Implement the exception handlers, starting with the seven marked "must" in
 [`02-exception-taxonomy.md`](02-exception-taxonomy.md) (the ones the demo actually uses)
 before the other seven. Each handler ships with a fixture that should trigger it and a
 near-miss fixture that deliberately shouldn't.
 
-**Definition of done:** all seven MVP handlers pass their trigger and near-miss fixtures.
+**Work in parallel:** Each exception handler gets its own branch against the frozen
+`ExceptionHandler` interface from Phase 1. This phase can sustain seven concurrent branches.
+
+**Definition of done:** all seven MVP handlers pass their trigger and near-miss fixtures;
+seven PRs merged.
 
 ### Phase 5 — Wire it end to end
 **Hours 16–20 · hard cutoff**
@@ -408,13 +498,59 @@ in by hand.
 
 Run the full demo twice, once with the network disabled, and record a fallback video before
 the final hour — a live demo with no backup is the single biggest unforced error a
-hackathon team can make.
+hackathon team can make. Polish and prepare the Devpost submission.
 
-**Definition of done:** a recorded fallback video exists on disk before hour 29 ends.
+**Definition of done:** a recorded fallback video exists on disk before hour 29 ends;
+Devpost submission drafted.
 
 ---
 
-## 8. Verification
+## 9. Submission checklist
+
+Per the official rules: **Devpost only** — Discord posts and a public repo alone do not
+count as a submission. Confirm every item below before the deadline (Sept 7, 3:30 AM IST).
+
+### 9.1 Devpost submission fields
+
+- [ ] Team name
+- [ ] Team member names
+- [ ] Selected track — **Track 2: Autonomous Office of the CFO**
+- [ ] Public GitHub repository link
+- [ ] Live project link (if deployed — optional per rules, but include if Phase 8 has time)
+- [ ] Public demo video link
+- [ ] Brief description of what was built
+- [ ] Brief description of the project and how it works
+
+### 9.2 Demo video requirements
+
+- [ ] Follows the beat sheet in [`04-demo-script.md`](04-demo-script.md)
+- [ ] **Explicitly shows the AO sessions used during the build** — this is a stated
+      requirement, not implied. Include the fleet-view screenshot from §8.1 as its own beat,
+      not a passing mention.
+- [ ] Under the target runtime (2:45, hard ceiling 3:00 per the demo script)
+- [ ] A recorded fallback exists in case the live version fails during judging
+
+### 9.3 GitHub README must clearly state
+
+- [ ] What the project does
+- [ ] How to run it (setup steps, environment variables, `docker-compose up`, etc.)
+- [ ] Which track it's submitted to (Track 2)
+- [ ] What agent workflow was built (link to [§2 Architecture](#2-architecture) or summarize it)
+- [ ] How to run the experiment — describe the Run 1 → Run 2 (treatment) → Run 2 (control) setup
+- [ ] Actual measured numbers from Phase 7, not illustrative ones
+- [ ] Any demo or live links
+
+### 9.4 Process rules to not overlook
+
+- [ ] Every team member registered individually (not just one signup for the team)
+- [ ] Joined the mandatory Discord — https://discord.gg/Sy3EwRBQX3
+- [ ] Generated a hackathon pass — https://aoagents.dev/hackathons/syndicate/pass/
+- [ ] One official track selected for judging (Track 2 — don't submit to both)
+- [ ] One submission per team, submitted before Sept 7, 3:30 AM IST
+
+---
+
+## 10. Verification (of the implementation)
 
 - **Golden dataset test suite** (written in Phase 1, before any handler) — a clean period
   must prove to $0.00 on all six obligations; a period with a planted exception must fail

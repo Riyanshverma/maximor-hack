@@ -277,27 +277,7 @@ the numbers actually are — **no invented results.**
 
 ---
 
-## 9. AO strategy
-
-The proof obligations (6) and exception handlers (14) are *embarrassingly parallel* behind a
-frozen interface. That is a real reason to run an agent fleet, and it is the honest story:
-
-1. **H0–H2:** install AO, scaffold repo, **freeze the schema + handler interface contract**,
-   write the golden-dataset test suite *first*. Parallel agents only work behind a contract.
-2. **H2 onward:** fan out AO sessions on separate branches — one per handler family, one per
-   proof obligation, one per frontend view, one per generator archetype.
-3. Every branch merges only when the golden test suite passes.
-4. **Keep an AO session log** (session → branch → what it built → CI result) and screenshot
-   the fleet view for the demo video.
-
-Submission line: *"We froze a schema and a handler contract in hour two, then ran an AO
-fleet to build 14 exception handlers and 6 proof obligations in parallel on separate
-branches, merging behind a golden-dataset test suite. That is why a two-person team shipped
-20 independent components in 30 hours."*
-
----
-
-## 10. Neatlogs strategy
+## 9. Neatlogs strategy
 
 Trace every agent run. Use a **genuine** failure we hit during the build — do not stage one.
 The likely candidate, based on the architecture: the Investigator asserting an FX rate it
@@ -306,19 +286,19 @@ did not retrieve. Neatlogs shows the trace; the fix is the deterministic FX tool
 
 ---
 
-## 11. Sponsor integrations — verdict
+## 10. Sponsor integrations — verdict
 
 | Sponsor | Verdict | Reasoning |
 |---|---|---|
-| **AO** | **Required + genuinely useful** | Mandatory; our parallel build topology is a real use, not decorative |
 | **Dodo Payments** | **Useful** | MoR payouts are the actual object we reconcile. Not forced |
 | **Neatlogs** | **Useful** | Two lines of SDK; powers the reliability narrative |
-| **TensorMux** | **Optional** | Only if it can front our model calls for cost metering. Timebox to 30 min at H1; drop without regret |
+| **TensorMux (GLM-4.7-flash)** | **Useful** | Free sponsor API for high-volume classification tasks; genuine cost/capability trade-off, not decorative |
+| **Smallest.ai** | **Optional** | Voice-agent stretch feature for hands-free exception resolution; does not block core deliverable |
 | **AI Grants India** | **N/A** | Credits, not an integration |
 
 ---
 
-## 12. Scope control
+## 11. Scope control
 
 **MUST HAVE (this is the submission):** ingestion from Dodo test mode · deterministic
 matcher · proof engine P1–P6 · 6–8 exception types end to end · Investigator with cited
@@ -335,7 +315,7 @@ multi-tenant · a general-purpose rules DSL · mobile · anything touching real 
 
 ---
 
-## 13. 30-hour plan (two full-stack devs, A and B)
+## 12. 30-hour plan (two full-stack devs, A and B)
 
 **T-24 → T0 (prep — non-code only; confirm the rules permit pre-building before writing
 any code):** register Dodo test account + API keys, AO + Neatlogs accounts, read Dodo API
@@ -358,7 +338,7 @@ cut, not finished.
 
 ---
 
-## 14. Demo (2–3 minutes)
+## 13. Demo (2–3 minutes)
 
 1. **0:00–0:20** — "This is a $9,412.33 payout from a merchant of record. Finance has to
    break it into charges, fees, taxes, refunds and disputes, and prove the clearing account
@@ -382,7 +362,7 @@ Opening line: *"TieOut is a close agent that refuses to post anything it cannot 
 
 ---
 
-## 15. Judge questions, answered by the demo itself
+## 14. Judge questions, answered by the demo itself
 
 | Question | Answered by |
 |---|---|
@@ -397,7 +377,7 @@ Opening line: *"TieOut is a close agent that refuses to post anything it cannot 
 
 ---
 
-## 16. Risks
+## 15. Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -412,7 +392,7 @@ Opening line: *"TieOut is a close agent that refuses to post anything it cannot 
 
 ---
 
-## 17. Verification
+## 16. Verification
 
 - **Golden dataset test suite** (written at H2, before handlers) — a clean period must prove
   to $0.00; a period with a planted exception must fail the specific expected obligation.
@@ -423,7 +403,7 @@ Opening line: *"TieOut is a close agent that refuses to post anything it cannot 
 
 ---
 
-## 18. The 30-second winning argument
+## 17. The 30-second winning argument
 
 > Finance teams get one payout from a payment processor and have to break it back into
 > hundreds of charges, fees, taxes, refunds, and disputes, then prove the clearing account
