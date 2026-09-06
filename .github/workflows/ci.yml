@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12']
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tieout
+          POSTGRES_PASSWORD: tieout_dev
+          POSTGRES_DB: tieout
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Lint with ruff
+        run: uv run ruff check backend/
+
+      - name: Type check with pyright
+        run: uv run pyright backend/app
+
+      - name: Run tests
+        run: uv run pytest backend/tests/ -v
+        env:
+          DATABASE_URL: postgresql://tieout:tieout_dev@localhost:5432/tieout
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: bun install
+
+      - name: Build
+        working-directory: ./frontend
+        run: bun run build
+
+      # Tests only if they exist
+      - name: Check for tests
+        id: check_tests
+        working-directory: ./frontend
+        run: |
+          if bun test 2>&1 | grep -q "No tests"; then
+            echo "no_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "no_tests=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Run tests
+        working-directory: ./frontend
+        run: bun test
+        if: steps.check_tests.outputs.no_tests == 'false'
