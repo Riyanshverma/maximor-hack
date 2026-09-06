@@ -54,11 +54,15 @@ class ExceptionHandler(Protocol):
         """Form hypotheses about root cause (may use LLM for structure only)."""
         ...
 
-    def propose(self, exc: "ExceptionDraft", hypothesis: dict[str, Any]) -> Optional[dict[str, Any]]:
-        """Propose a remedy for this exception (may use LLM, but amounts from tools only)."""
+    def propose(
+        self, exc: "ExceptionDraft", hypothesis: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """Propose a remedy (may use LLM, amounts from tools only)."""
         ...
 
-    def compile_rule(self, exc: "ExceptionDraft", ruling: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def compile_rule(
+        self, exc: "ExceptionDraft", ruling: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         """Compile a human ruling into a reusable rule."""
         ...
 

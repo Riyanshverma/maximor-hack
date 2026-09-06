@@ -14,8 +14,8 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-from backend.app.models.base import Base
-from backend.app.models.schema import (  # noqa: F401
+from backend.app.models.base import Base  # noqa: E402
+from backend.app.models.schema import (  # noqa: E402, F401
     AuditEvent,
     BankLine,
     CloseRun,

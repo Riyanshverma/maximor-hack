@@ -21,8 +21,8 @@ class CloseRun(Base):
     __tablename__ = "close_run"
 
     id = Column(String(36), primary_key=True)
-    period = Column(String(7), nullable=False, index=True)  # e.g. '2026-08'
-    status = Column(String(20), nullable=False)  # pending, ingest, normalize, match, compose, prove, detect, investigate, route, reprove, package, closed
+    period = Column(String(7), nullable=False, index=True)  # '2026-08'
+    status = Column(String(20), nullable=False)  # ingest, compose, prove, etc.
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
     rules_enabled = Column(Boolean, default=True)
@@ -38,7 +38,7 @@ class SettlementEvent(Base):
     run_id = Column(String(36), ForeignKey("close_run.id"), nullable=False, index=True)
     source = Column(String(20), nullable=False)  # 'dodo' or 'seed'
     external_id = Column(String(255), nullable=True)
-    event_type = Column(String(50), nullable=False)  # payment, refund, fee, dispute, tax, reserve, fx_adjustment, payout
+    event_type = Column(String(50), nullable=False)  # payment, fee, dispute, etc.
     payout_id = Column(String(36), nullable=True, index=True)
     order_id = Column(String(255), nullable=True)
     customer_id = Column(String(255), nullable=True)
@@ -66,7 +66,7 @@ class Payout(Base):
     fees = Column(NUMERIC(18, 4), nullable=False)
     net = Column(NUMERIC(18, 4), nullable=False)
     currency = Column(String(3), nullable=False)
-    bank_line_id = Column(String(36), ForeignKey("bank_line.id"), nullable=True)
+    bank_line_id = Column(String(36), nullable=True)  # reference only, FK on bank_line side
 
 
 class BankLine(Base):
