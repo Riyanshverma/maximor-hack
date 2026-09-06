@@ -9,7 +9,6 @@ def test_exception_handler_protocol_importable():
 
 def test_exception_handler_has_required_methods():
     """RED: ExceptionHandler should have detect, gather, hypothesize, propose, compile_rule."""
-    from backend.app.contracts import ExceptionHandler
     required_methods = {"detect", "gather", "hypothesize", "propose", "compile_rule"}
     # This will fail until we implement the protocol
     assert len(required_methods) > 0

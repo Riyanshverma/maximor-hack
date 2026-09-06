@@ -40,8 +40,8 @@ def test_schema_tables_exist():
     )
 
     # Ensure models are imported so Base.metadata is populated, then create tables.
-    from backend.app.models.base import Base
     import backend.app.models.schema  # noqa: F401
+    from backend.app.models.base import Base
 
     Base.metadata.create_all(bind=engine)
     existing_tables = set(inspect(engine).get_table_names())

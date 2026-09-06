@@ -37,7 +37,13 @@ async def stream_run(run_id: str):
 async def get_proofs(run_id: str):
     """Get proof results for a run (P1–P6)."""
     return [
-        {"obligation": f"P{i}", "passed": True, "expected": "0.00", "actual": "0.00", "delta": "0.00"}
+        {
+            "obligation": f"P{i}",
+            "passed": True,
+            "expected": "0.00",
+            "actual": "0.00",
+            "delta": "0.00",
+        }
         for i in range(1, 7)
     ]
 
