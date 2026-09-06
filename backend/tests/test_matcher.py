@@ -123,3 +123,96 @@ def test_match_bank_lines_does_not_match_outside_date_window(session):
     assert matches == []
     refreshed = session.get(BankLine, "bank-1")
     assert refreshed.matched_payout_id is None
+
+
+def test_match_bank_lines_sets_bidirectional_foreign_keys(session):
+    make_payout(session, "payout-bidi", Decimal("100.00"), datetime(2026, 8, 10))
+    bank_line = BankLine(
+        id="bank-bidi",
+        run_id=RUN_ID,
+        posted_at=datetime(2026, 8, 11),
+        amount=Decimal("100.00"),
+        currency="USD",
+        description="deposit",
+    )
+    session.add(bank_line)
+    session.commit()
+
+    matches = match_bank_lines(session, RUN_ID)
+    assert matches == [("bank-bidi", "payout-bidi")]
+
+    refreshed_line = session.get(BankLine, "bank-bidi")
+    assert refreshed_line is not None
+    assert refreshed_line.matched_payout_id == "payout-bidi"
+
+    refreshed_payout = session.get(Payout, "payout-bidi")
+    assert refreshed_payout is not None
+    assert refreshed_payout.bank_line_id == "bank-bidi"
+
+
+def test_match_bank_lines_resolves_1_to_n_ambiguity(session):
+    """1 payout with multiple matching bank lines must leave both unmatched."""
+    make_payout(session, "payout-ambig-1", Decimal("50.00"), datetime(2026, 8, 10))
+    bl1 = BankLine(
+        id="bank-ambig-1a", run_id=RUN_ID, posted_at=datetime(2026, 8, 10),
+        amount=Decimal("50.00"), currency="USD", description="dep1",
+    )
+    bl2 = BankLine(
+        id="bank-ambig-1b", run_id=RUN_ID, posted_at=datetime(2026, 8, 11),
+        amount=Decimal("50.00"), currency="USD", description="dep2",
+    )
+    session.add_all([bl1, bl2])
+    session.commit()
+
+    matches = match_bank_lines(session, RUN_ID)
+    assert matches == []
+
+    p = session.get(Payout, "payout-ambig-1")
+    assert p is not None and p.bank_line_id is None
+    assert session.get(BankLine, "bank-ambig-1a").matched_payout_id is None
+    assert session.get(BankLine, "bank-ambig-1b").matched_payout_id is None
+
+
+def test_match_bank_lines_resolves_n_to_1_ambiguity(session):
+    """Multiple payouts matching same bank line must leave all unmatched."""
+    make_payout(session, "payout-ambig-2a", Decimal("70.00"), datetime(2026, 8, 10))
+    make_payout(session, "payout-ambig-2b", Decimal("70.00"), datetime(2026, 8, 11))
+    bl = BankLine(
+        id="bank-ambig-2", run_id=RUN_ID, posted_at=datetime(2026, 8, 10),
+        amount=Decimal("70.00"), currency="USD", description="dep",
+    )
+    session.add(bl)
+    session.commit()
+
+    matches = match_bank_lines(session, RUN_ID)
+    assert matches == []
+
+    assert session.get(Payout, "payout-ambig-2a").bank_line_id is None
+    assert session.get(Payout, "payout-ambig-2b").bank_line_id is None
+    assert session.get(BankLine, "bank-ambig-2").matched_payout_id is None
+
+
+def test_match_bank_lines_status_filter_and_currency(session):
+    """Only paid/completed payouts match; currency must match."""
+    p_pending = Payout(
+        id="payout-pending", run_id=RUN_ID, external_id="ext-pend",
+        status="pending", created_at=datetime(2026, 8, 10),
+        settled_at=datetime(2026, 8, 10), gross=Decimal("30.00"),
+        fees=Decimal("0.00"), net=Decimal("30.00"), currency="USD",
+    )
+    p_eur = Payout(
+        id="payout-eur", run_id=RUN_ID, external_id="ext-eur",
+        status="completed", created_at=datetime(2026, 8, 10),
+        settled_at=datetime(2026, 8, 10), gross=Decimal("40.00"),
+        fees=Decimal("0.00"), net=Decimal("40.00"), currency="EUR",
+    )
+    bl_usd = BankLine(
+        id="bank-eur-mismatch", run_id=RUN_ID, posted_at=datetime(2026, 8, 10),
+        amount=Decimal("40.00"), currency="USD", description="usd dep",
+    )
+    session.add_all([p_pending, p_eur, bl_usd])
+    session.commit()
+
+    matches = match_bank_lines(session, RUN_ID)
+    assert matches == []
+

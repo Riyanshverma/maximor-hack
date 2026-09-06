@@ -1,5 +1,5 @@
 """P4: every settled payout must tie out to exactly one matching bank deposit."""
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from typing import cast
 
@@ -7,11 +7,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.contracts import ProofResult, RunContext
+from backend.app.engine.matcher import (
+    BANK_MATCH_DATE_WINDOW,
+    BANK_MATCH_DATE_WINDOW_DAYS,
+    VALID_PAYOUT_STATUSES,
+)
 from backend.app.ingest.loader import get_db_url
 from backend.app.models.schema import BankLine, Payout
 
-# Bank deposits typically post within a week of the payout settling.
-MATCH_WINDOW = timedelta(days=7)
+MATCH_WINDOW = BANK_MATCH_DATE_WINDOW
 
 
 class P4BankTieOut:
@@ -20,15 +24,27 @@ class P4BankTieOut:
     id = "P4"
     blocking = True
 
-    def evaluate(self, ctx: RunContext) -> ProofResult:
+    def evaluate(self, ctx: RunContext, session: Session | None = None) -> ProofResult:
+        if session is not None:
+            return self._evaluate(session, ctx)
         engine = create_engine(get_db_url())
-        with Session(engine) as session:
-            payouts = session.scalars(
-                select(Payout).where(Payout.run_id == ctx.run_id, Payout.status == "completed")
-            ).all()
-            bank_lines = session.scalars(
+        with Session(engine) as owned_session:
+            return self._evaluate(owned_session, ctx)
+
+    def _evaluate(self, session: Session, ctx: RunContext) -> ProofResult:
+        payouts = list(
+            session.scalars(
+                select(Payout).where(
+                    Payout.run_id == ctx.run_id,
+                    Payout.status.in_(VALID_PAYOUT_STATUSES),
+                )
+            )
+        )
+        bank_lines = list(
+            session.scalars(
                 select(BankLine).where(BankLine.run_id == ctx.run_id)
-            ).all()
+            )
+        )
 
         lines_by_payout: dict[str, list[BankLine]] = {}
         for line in bank_lines:
@@ -38,6 +54,12 @@ class P4BankTieOut:
         failures = []
         for payout in payouts:
             matches = lines_by_payout.get(str(payout.id), [])
+            # Also check if payout.bank_line_id links to a bank line
+            if not matches and payout.bank_line_id is not None:
+                bl = session.get(BankLine, payout.bank_line_id)
+                if bl is not None:
+                    matches = [bl]
+
             if len(matches) != 1:
                 failures.append({
                     "payout_id": payout.id,
@@ -56,6 +78,16 @@ class P4BankTieOut:
                 })
                 continue
 
+            if str(line.currency) != str(payout.currency):
+                failures.append({
+                    "payout_id": payout.id,
+                    "reason": (
+                        f"currency mismatch: payout.currency={payout.currency}, "
+                        f"bank_line.currency={line.currency}"
+                    ),
+                })
+                continue
+
             if payout.settled_at is None:
                 failures.append({
                     "payout_id": payout.id,
@@ -63,15 +95,22 @@ class P4BankTieOut:
                 })
                 continue
 
+            if line.posted_at is None:
+                failures.append({
+                    "payout_id": payout.id,
+                    "reason": "bank_line has no posted_at, cannot verify date window",
+                })
+                continue
+
             settled_at = cast(datetime, payout.settled_at)
             posted_at = cast(datetime, line.posted_at)
-            window_end = settled_at + MATCH_WINDOW
-            if not (settled_at <= posted_at <= window_end):
+            delta = abs(posted_at - settled_at)
+            if delta > BANK_MATCH_DATE_WINDOW:
                 failures.append({
                     "payout_id": payout.id,
                     "reason": (
-                        f"bank_line posted_at {posted_at} outside window "
-                        f"[{settled_at}, {window_end}]"
+                        f"bank_line posted_at {posted_at} outside +/- "
+                        f"{BANK_MATCH_DATE_WINDOW_DAYS} day window of settled_at {settled_at}"
                     ),
                 })
 
@@ -84,3 +123,4 @@ class P4BankTieOut:
             delta=unmatched,
             detail={"failures": failures},
         )
+
