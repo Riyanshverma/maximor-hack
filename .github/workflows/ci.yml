@@ -89,4 +89,3 @@ jobs:
         working-directory: ./frontend
         run: bun test
         if: steps.check_tests.outputs.no_tests == 'false'
-        continue-on-error: true
