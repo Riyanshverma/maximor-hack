@@ -39,3 +39,6 @@ coverage/
 
 # Alembic
 alembic.ini.orig
+
+# uv
+uv.lock
