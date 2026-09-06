@@ -1,24 +1,28 @@
 # TieOut — Implementation Progress
 
-**Status as of 2026-09-06:** Phases 1–3 complete (11 PRs merged). Frozen contract, provable data flow, and six blocking proofs ready. Phase 4 begins with seven MVP exception handlers.
+**Status as of 2026-09-06:** Phases 1–3 fully implemented, verified, and audited (101 tests passing across 12 test files). Frozen contracts, deterministic data flow, bidirectional matcher, live PostgreSQL integration, and six blocking proof obligations ready. Phase 4 begins with seven MVP exception handlers.
 
 ---
 
 ## Phase 1 — Freeze the contract (DONE)
 
-### Database Schema
+### Database Schema & Migrations
 `backend/app/models/schema.py` defines the following tables:
 - **close_run** — tracks period, status, rules_enabled flag, seed for reproducibility, metrics
 - **settlement_event** — canonical form from Dodo breakup-details (event_type, payout_id, amount_native, amount_payout, fx_rate, raw JSONB payload)
 - **payout** — gross, fees, net, currency, bank_line_id reference
 - **bank_line** — posted_at, amount, currency, matched_payout_id reference
 - **invoice** — customer_id, issued_at, subtotal, tax, total, line_items JSONB
-- **gl_account** — chart of accounts (code, name, type, normal_side, is_restricted)
+- **gl_account** — 17 standard accounts from `docs/01-chart-of-accounts.md` (code, name, type, normal_side, is_restricted)
 - **journal_entry** — status (draft|posted|reversed), created_by (agent|human|rule), source_exception_id, rule_id
 - **journal_line** — debit/credit pair, account_code, settlement_event_id link, CHECK constraint (exactly one of debit/credit is non-zero)
 - **exception** — type, severity, status (open|auto_resolved|escalated|human_resolved), evidence/hypotheses/proposed_remedy JSONB, matched_rule_id, ground_truth_key
 - **rule** — name, version, predicate/action JSONB, rationale, source_ruling_id, active flag, times_applied counter
 - **proof_result** — id, passed, expected/actual/delta for audit trail
+- **audit_event** — append-only audit trail with SQLAlchemy event listener guarding against updates or deletions
+- **exception.ground_truth_key** — write-once SQLAlchemy event listener guarding against mutating ground truth keys
+
+Alembic migration (`001_initial_schema.py`) includes dialect guards for PostgreSQL vs. SQLite, resolves circular foreign keys between `payout` and `bank_line`, and ensures clean `alembic upgrade head` execution.
 
 ### Contracts Frozen
 `backend/app/contracts.py` defines two immutable protocols:
@@ -31,38 +35,22 @@
 - `compile_rule(exc, ruling) → dict | None` — Judgment Compiler compiles human rulings into reusable rules
 
 **ProofObligation** — each proof implements:
-- `evaluate(ctx: RunContext) → ProofResult` — pure function, no LLM, no network, no mocking
+- `evaluate(ctx: RunContext) → ProofResult` — pure function, no LLM, no network, no mocking; returns `Decimal` metrics serialized as strings in details.
 
-### API Stubs
-`backend/app/main.py` and `backend/app/api/__init__.py` establish FastAPI stubs for future phases.
-
-### CI Pipeline
-`.github/workflows/ci.yml` (triggered on push to main and PRs):
-- **Backend:** Python 3.12, PostgreSQL 16 service container
-  - Install dependencies via `uv sync --all-extras`
-  - Lint with `ruff check backend/`
-  - Type check with `pyright backend/app` (basic mode)
-  - Run tests with `pytest backend/tests/ -v` (DATABASE_URL points to test Postgres)
-- **Frontend:** Bun package manager
-  - Install with `bun install` (working-directory: ./frontend)
-  - Build with `bun run build`
-  - Run tests with `bun test` (skipped if no tests exist)
+### API Endpoints
+`backend/app/main.py` provides FastAPI endpoints:
+- `POST /runs` accepts JSON `CreateRunRequest` with regex-validated period format (`^\d{4}-(?:0[1-9]|1[0-2])$`)
+- `GET /runs/{run_id}` with 404 on non-existent runs
+- `GET /runs/{run_id}/proofs` triggers matcher and evaluates all six proofs (P1–P6) with strict string-serialized money values
+- `POST /exceptions/{exc_id}/resolve` accepts JSON `ResolveExceptionRequest` enforcing non-empty rationale
 
 ### Dependencies Confirmed
 - **Backend:** `pyproject.toml`
-  - Runtime: FastAPI ≥0.104.0, Uvicorn ≥0.30.0, SQLAlchemy ≥2.0.0, Alembic ≥1.13.0, Pydantic ≥2.5.0
-  - Dev: pytest ≥7.4.0, pytest-asyncio ≥0.23.0, httpx ≥0.25.0, ruff ≥0.4.0, pyright ≥1.1.0
+  - Runtime: FastAPI, Uvicorn, SQLAlchemy 2.0, Alembic, Pydantic, psycopg2-binary, httpx
+  - Dev: pytest, pytest-asyncio, ruff, pyright
   - Package manager: `uv` (astral-sh)
-- **Frontend:** `package.json` (bun)
+- **Frontend:** `package.json` (bun/npm)
   - Next.js 15 scaffold at `frontend/app/`
-
-### Test Coverage
-`backend/tests/test_contracts.py` validates the frozen protocols; `backend/tests/test_schema.py` confirms database table creation.
-
-### Merged PRs
-- **#3:** Phase 1 — Freeze contracts (schema + protocols + API stubs)
-- **#2:** Docs refactor with sponsor models
-- **#1:** TieOut README
 
 ---
 
@@ -72,64 +60,78 @@
 `backend/app/ingest/dodo.py` — production-ready Dodo API integration. Fetches payouts and breakup-details; canonicalizes into `SettlementEvent` objects.
 
 ### Test Data Generator
-`backend/app/ingest/generator.py` — deterministic generator with seeded randomness. Implements `PlantedException` class to document known exception types in test data (period, expected_resolution, ground_truth_key). Manifest published in generator module docstring: all planted exceptions listed with periods (August, September) and expected resolutions for metric validation.
+`backend/app/ingest/generator.py` — deterministic generator with seeded randomness:
+- Decorated with `__test__ = False` to prevent pytest collection confusion
+- Generates 17 chart of accounts matching `docs/01-chart-of-accounts.md`
+- Generates deterministic SHA-256 IDs, UTC datetimes, and balanced clean journal entries
+- Implements `PlantedException` documenting known exception types across August and September runs
 
 ### Data Loader
-`backend/app/ingest/loader.py` — establishes database connection via `get_db_url()` and provides engine/session patterns used by all downstream components.
-
-### Test Coverage
-`backend/tests/test_generator.py` validates deterministic seeding and planted-exception manifest; fixtures trigger known exception types for Phase 4+ handler testing.
-
-### Merged PRs
-- **#4:** Phase 2 — Dodo integration and deterministic test data generator
+`backend/app/ingest/loader.py`:
+- `get_db_url()` provides connection fallback (probes local port 55432, then default 5432)
+- Idempotent cleanup in reverse dependency order
+- Dependency-tiered insertion (`CloseRun` -> `Payout` -> `BankLine` -> `SettlementEvent` -> `Invoice` -> `JournalEntry` -> `JournalLine`) with separate flushes to respect PostgreSQL foreign key constraints
+- Transactional execution with automatic rollback on error
 
 ---
 
 ## Phase 3 — Six proofs + Matcher (DONE)
 
-All proofs are pure functions (`evaluate(ctx: RunContext) → ProofResult`), blocking (`blocking=True`), with no LLM, no network, no mocking. Each has a clean-pass test and a deliberate failure test.
+All proofs are pure functions (`evaluate(ctx: RunContext, session: Session | None = None) → ProofResult`), blocking (`blocking=True`), with no LLM, no network, no mocking, rejecting non-finite Decimals and serializing money as decimal strings.
 
 ### P1: Debit/Credit Balance
-`backend/app/engine/proofs/p1.py` — sums all debit lines and credit lines from journal entries; must net to $0.00 for the period to close. Test: clean period passes; off-by-one-cent case fails as expected.
+`backend/app/engine/proofs/p1.py` — proves balance per entry AND per currency (`sum(debits) == sum(credits)`). Rejects mixed-currency entries and off-by-one-cent imbalances.
 
 ### P2: Payout Components Sum
-`backend/app/engine/proofs/p2.py` — sums a payout's component settlement events (in payout currency) and verifies the total equals `payout.net`. Catches broken payout decomposition. Test: clean period passes; sum-mismatch fixture fails.
+`backend/app/engine/proofs/p2.py` — sums component settlement events grouped by payout currency and verifies the total equals `payout.net`. Rejects currency mismatches and off-by-one-cent discrepancies.
 
 ### P3: Clearing Account Rollforward
-`backend/app/engine/proofs/p3.py` — sums signed `SettlementEvent.amount_payout` per run into categories (charges, fees, refunds, disputes, tax_remitted, reserve_movements, fx_adjustment) and nets against total `Payout.net`. Residual must equal $0.00. **The headline proof from `docs/04-demo-script.md`:** a deliberate $4,812.50 residual mirrors the demo script's blocking moment. Test: clean period passes; $4,812.50 delta case fails.
+`backend/app/engine/proofs/p3.py` — evaluates the actual General Ledger rollforward on clearing account `1310`:
+$$\text{Opening Balance (0.00)} + \sum \text{debits}_{1310} - \sum \text{credits}_{1310} = \text{Closing Balance (0.00)}$$
+**Headline proof from demo script:** Detects the deliberate $4,812.50 residual and catches wrong-account mispostings (such as crediting 7490 instead of 1310).
 
-### P4: Bank Tieout
-`backend/app/engine/proofs/p4.py` — every settled payout must tie out to exactly one matching bank deposit. Bank deposits typically post within a week of payout settlement. Catches unmatched payouts and timing misalignment. Test: clean period passes; unmatched payout fixture fails.
+### P4: Bank Tieout & Matcher
+- `backend/app/engine/matcher.py`:
+  - Matches payouts to bank lines with exact amount (+/-$0.00) and currency check
+  - Symmetric ±3-day date window (`BANK_MATCH_DATE_WINDOW = timedelta(days=3)`)
+  - Filters for settled payouts (`status in ("paid", "completed")`)
+  - Resolves 1:N and N:1 ambiguities (leaves ambiguous records unmatched)
+  - Persists bidirectional foreign keys (`bank_line.matched_payout_id` and `payout.bank_line_id`)
+- `backend/app/engine/proofs/p4.py`:
+  - Verifies that every settled payout has exactly one matched bank line conforming to the shared matcher contract.
 
 ### P5: Revenue Completeness
-`backend/app/engine/proofs/p5.py` — sums recognized revenue from settlement events (payments, refunds, disputes in native currency) and compares against total invoiced amount. Must match exactly for the period to close. Test: clean period passes; revenue-mismatch fixture fails.
+`backend/app/engine/proofs/p5.py` — verifies that recognized revenue on accounts `4010` and `4020` net of contra-revenue account `4900` equals invoiced `subtotal` per currency:
+- Excludes sales tax collected (`2100`)
+- Excludes dispute fees (`6820` expense)
+- Catches tax mispostings to 4010 and revenue timing mismatches.
 
-### P6: No Orphans
-`backend/app/engine/proofs/p6.py` — every SettlementEvent must map to exactly one JournalLine via settlement_event_id. Catches missing mappings (unmapped events), duplicate mappings (one event linked twice), and dangling mappings (journal lines referencing non-existent events). Test: clean period passes; orphaned/duplicate mapping fixture fails.
+### P6: No Orphans Mapping Invariant
+`backend/app/engine/proofs/p6.py` — proves that every `SettlementEvent` maps to its designated clearing journal line (`1310`), properly handling multi-line split entries without false duplicate errors and catching missing or dangling mappings.
 
-### Payout Decomposition Matcher
-`backend/app/engine/matcher.py` — groups settlement events by payout_id (`decompose_payout()`) and matches payouts to bank lines with exact-amount (zero tolerance) matching within a ±3-day date window (`match_bank_lines()`). Ambiguous or unmatched pairs are left unmapped.
+### Golden Integration Test Suite
+`backend/tests/test_golden.py` — end-to-end integration tests on real PostgreSQL and SQLite:
+1. `test_golden_clean_baseline_all_proofs_pass` — full pipeline with matcher and proofs P1–P6 passes with 0 delta
+2. `test_golden_isolated_defect_p1_imbalance` — isolated one-cent journal imbalance fails P1
+3. `test_golden_isolated_defect_p2_component_mismatch` — component mismatch fails P2
+4. `test_golden_isolated_defect_p3_clearing_misposting` — misposting payout credit to 7490 fails P3
+5. `test_golden_isolated_defect_p4_bank_window` — deposit outside 3-day window fails P4
+6. `test_golden_isolated_defect_p5_tax_miscredited_to_revenue` — tax misposting fails P5
+7. `test_golden_isolated_defect_p6_missing_mapping` — unmapped event fails P6
 
-### Test Coverage
-- **test_p1.py** — P1 proofs (clean + off-by-one-cent failure)
-- **test_p2.py** — P2 proofs (clean + sum-mismatch failure)
-- **test_p3.py** — P3 proofs (clean + $4,812.50 delta failure from demo script)
-- **test_p4.py** — P4 proofs (clean + unmatched payout failure)
-- **test_p5_revenue_completeness.py** — P5 proofs (clean + missing journal entry failure)
-- **test_p6_no_orphans.py** — P6 proofs (clean + orphaned refund failure)
-- **test_matcher.py** — Payout decomposition and bank line matching
-- **test_api.py** — FastAPI endpoint stubs and orchestration flow
-
-All 39 tests passing (as of latest CI run).
-
-### Merged PRs
-- **#6:** P1 debit/credit balance proof obligation
-- **#7:** P2 payout components sum proof obligation
-- **#8:** Phase 3 matcher and bank tieout (payout decomposition)
-- **#9:** P4 bank tieout proof obligation
-- **#10:** P5 revenue completeness proof obligation
-- **#11:** P3 clearing account rollforward proof (headline proof from demo script)
-- **#5:** P6 no-orphans proof obligation
+### Complete Test Inventory (101 tests passing)
+- `test_golden.py` (7 tests) — Golden PostgreSQL/SQLite integration baseline & defect injections
+- `test_api.py` (16 tests) — FastAPI contracts, JSON validation, SSE, error handling
+- `test_contracts.py` (11 tests) — Abstract protocol definitions & run context
+- `test_generator.py` (16 tests) — Seeded determinism, planted exceptions manifest, loader idempotency
+- `test_schema.py` (7 tests) — Alembic migration, ORM metadata, immutability listeners
+- `test_matcher.py` (8 tests) — Payout decomposition, 1:1 matching, ambiguity resolution, bidirectional FKs
+- `test_p1.py` (5 tests) — P1 multi-currency balance & decimal precision
+- `test_p2.py` (5 tests) — P2 component sums & currency grouping
+- `test_p3.py` (7 tests) — P3 clearing rollforward, demo $4,812.50 residual, 7490 misposting
+- `test_p4.py` (8 tests) — P4 bank tieout, 3-day window, status filtering
+- `test_p5_revenue_completeness.py` (6 tests) — P5 revenue net of contra, tax/fee exclusions
+- `test_p6_no_orphans.py` (5 tests) — P6 designated clearing line & split entry handling
 
 ---
 
