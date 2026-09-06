@@ -1,17 +1,18 @@
 """Test database schema and migrations."""
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import NUMERIC, create_engine, inspect
+from sqlalchemy import NUMERIC, create_engine, inspect, text
 
 import backend.app.models.schema  # noqa: F401
 from backend.app.models.base import Base
 
 
-def test_alembic_migration_runs_clean():
+def test_alembic_migration_runs_clean(monkeypatch):
     """Alembic migration upgrade and downgrade should run cleanly."""
     alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
     assert alembic_ini.exists()
@@ -30,15 +31,40 @@ def test_alembic_migration_runs_clean():
             tables = inspect(engine).get_table_names()
             assert "close_run" in tables
             assert "journal_line" in tables
-    else:
+        return
+
+    # This test intentionally downgrades to a blank database and back, which
+    # would wipe out tables other test modules share in the "public" schema
+    # of the same live Postgres database used across the whole session. Run
+    # it in its own throwaway schema instead so it never touches shared
+    # state. alembic/env.py reads DATABASE_URL directly (taking priority over
+    # the Config object's sqlalchemy.url), so the isolated schema must be
+    # selected via the env var, not just the Config.
+    base_engine = create_engine(db_url)
+    schema_name = f"migration_test_{uuid.uuid4().hex[:8]}"
+    with base_engine.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA "{schema_name}"'))
+    try:
+        # Note: the "=" is left unescaped (not "%3D") because alembic/env.py
+        # re-sets sqlalchemy.url from os.environ verbatim, and configparser's
+        # interpolation rejects any "%" in a value it hasn't escaped itself.
+        isolated_url = f"{db_url}?options=-csearch_path={schema_name}"
+        monkeypatch.setenv("DATABASE_URL", isolated_url)
         cfg = Config(str(alembic_ini))
-        cfg.set_main_option("sqlalchemy.url", db_url)
+        cfg.set_main_option("sqlalchemy.url", isolated_url)
+        command.upgrade(cfg, "head")
         command.downgrade(cfg, "base")
         command.upgrade(cfg, "head")
-        engine = create_engine(db_url)
-        tables = inspect(engine).get_table_names()
+
+        engine = create_engine(isolated_url)
+        tables = inspect(engine).get_table_names(schema=schema_name)
         assert "close_run" in tables
         assert "journal_line" in tables
+        engine.dispose()
+    finally:
+        with base_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA "{schema_name}" CASCADE'))
+        base_engine.dispose()
 
 
 def test_schema_tables_exist():
