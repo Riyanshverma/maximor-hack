@@ -103,7 +103,7 @@ class TimingCutoffHandler:
                     "id": e.id,
                     "event_type": e.event_type,
                     "amount_payout": str(e.amount_payout),
-                    "occurred_at": e.occurred_at.isoformat() if e.occurred_at else None,
+                    "occurred_at": e.occurred_at.isoformat() if e.occurred_at is not None else None,
                 }
                 for e in events
             ],
