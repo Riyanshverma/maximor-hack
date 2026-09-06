@@ -104,7 +104,9 @@ def run_close(session: Session, run: CloseRun) -> list[dict]:
     counters = {"processed": 0, "auto": 0, "escalated": 0}
 
     _emit(timeline, "ingest", f"Ingesting settlement events for {run.period}", counters=counters)
-    seed_period_data(session, str(run.id), str(run.period), int(run.seed or 42))
+    seed_raw = getattr(run, "seed", 42)
+    seed = seed_raw if isinstance(seed_raw, int) else 42
+    seed_period_data(session, str(run.id), str(run.period), seed)
     session.flush()
     _emit(timeline, "normalize", "Normalized amounts to Decimal/NUMERIC", counters=counters)
     _emit(timeline, "match", "Matching payouts to bank lines", counters=counters)
@@ -183,17 +185,22 @@ def run_close(session: Session, run: CloseRun) -> list[dict]:
             "Close BLOCKED: proof failure requires ruling",
             counters=counters,
         )
-        run.status = "blocked"
+        setattr(run, "status", "blocked")
     else:
         _emit(timeline, "reprove", "Re-proved after remedies", counters=counters)
         _emit(timeline, "package", "Period closed; audit package ready", counters=counters)
-        run.status = "closed"
-    run.metrics = {
-        **(run.metrics or {}),
-        "timeline": timeline,
-        "counters": counters,
-        "proofs": [{"obligation": r.id, "passed": r.passed} for r in results],
-    }
+        setattr(run, "status", "closed")
+    existing_metrics = getattr(run, "metrics", None) or {}
+    setattr(
+        run,
+        "metrics",
+        {
+            **existing_metrics,
+            "timeline": timeline,
+            "counters": counters,
+            "proofs": [{"obligation": r.id, "passed": r.passed} for r in results],
+        },
+    )
     session.add(
         AuditEvent(
             id=f"ae_{uuid.uuid4().hex[:8]}",
@@ -202,7 +209,7 @@ def run_close(session: Session, run: CloseRun) -> list[dict]:
             action="run_finished",
             subject_type="close_run",
             subject_id=str(run.id),
-            payload={"status": run.status, "counters": counters},
+            payload={"status": getattr(run, "status", None), "counters": counters},
         )
     )
     session.flush()

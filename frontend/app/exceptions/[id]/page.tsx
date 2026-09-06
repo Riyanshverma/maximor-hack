@@ -1,19 +1,23 @@
 "use client";
 import { useEffect, useState } from "react";
 
-export default function ExceptionDetail({ params }: { params: { id: string } }) {
+export default function ExceptionDetail({ params }: { params: Promise<{ id: string }> }) {
   const [exc, setExc] = useState<any>(null);
+  const [id, setId] = useState("");
   const [rationale, setRationale] = useState("");
   const [result, setResult] = useState("");
 
   useEffect(() => {
-    fetch(`http://localhost:8000/exceptions/${params.id}`)
-      .then((r) => r.json())
-      .then(setExc);
-  }, [params.id]);
+    params.then((p) => {
+      setId(p.id);
+      fetch(`http://localhost:8000/exceptions/${p.id}`)
+        .then((r) => r.json())
+        .then(setExc);
+    });
+  }, [params]);
 
   async function resolve() {
-    const res = await fetch(`http://localhost:8000/exceptions/${params.id}/resolve`, {
+    const res = await fetch(`http://localhost:8000/exceptions/${id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ decision: "approved", rationale }),
