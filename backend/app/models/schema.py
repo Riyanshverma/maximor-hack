@@ -20,7 +20,7 @@ class CloseRun(Base):
     """A single close run for a period."""
     __tablename__ = "close_run"
 
-    id = Column(String(36), primary_key=True, default="run_001")
+    id = Column(String(36), primary_key=True)
     period = Column(String(7), nullable=False, index=True)  # e.g. '2026-08'
     status = Column(String(20), nullable=False)  # pending, ingest, normalize, match, compose, prove, detect, investigate, route, reprove, package, closed
     started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
