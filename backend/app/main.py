@@ -44,7 +44,7 @@ async def get_proofs(run_id: str):
 
 # GET /runs/{id}/exceptions — exception register
 @app.get("/runs/{run_id}/exceptions")
-async def get_exceptions(run_id: str, status: str = None):
+async def get_exceptions(run_id: str, status: str | None = None):
     """Get exceptions for a run, optionally filtered by status."""
     return []
 
