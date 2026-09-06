@@ -134,8 +134,8 @@ class JournalLine(Base):
     id = Column(String(36), primary_key=True)
     entry_id = Column(String(36), ForeignKey("journal_entry.id"), nullable=False, index=True)
     account_code = Column(String(10), ForeignKey("gl_account.code"), nullable=False)
-    debit = Column(NUMERIC(18, 4), default=0)
-    credit = Column(NUMERIC(18, 4), default=0)
+    debit = Column(NUMERIC(18, 4), nullable=False, default=0)
+    credit = Column(NUMERIC(18, 4), nullable=False, default=0)
     currency = Column(String(3), nullable=False)
     settlement_event_id = Column(String(36), ForeignKey("settlement_event.id"), nullable=True)
 
