@@ -56,7 +56,7 @@ class ResolveExceptionRequest(BaseModel):
         return v
 
 
-# POST /runs — start a close run (full Phase 5 pipeline: seed -> match -> prove -> investigate -> route)
+# POST /runs — start a close run (Phase 5 pipeline)
 @app.post("/runs", status_code=status.HTTP_200_OK)
 async def post_runs(payload: CreateRunRequest):
     """Start a close run for a period (runs the orchestrator synchronously)."""

@@ -3,6 +3,7 @@
 LLM call-out point is isolated in `llm_hypothesize` (default: deterministic
 fallback). Amounts always come from handler tools, never the model.
 """
+
 from typing import Any
 
 
@@ -26,7 +27,11 @@ def llm_hypothesize(exc_type: str, evidence: dict[str, Any]) -> list[dict[str, A
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(
-                {"model": "gpt-5-nano", "messages": [{"role": "user", "content": prompt}], "temperature": 0}
+                {
+                    "model": "gpt-5-nano",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                }
             ).encode(),
             headers={
                 "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",

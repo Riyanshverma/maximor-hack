@@ -1,4 +1,5 @@
 """Close orchestrator: deterministic spine Ingest -> ... -> Prove -> Detect -> Route."""
+
 import uuid
 from decimal import Decimal
 
@@ -21,6 +22,7 @@ from backend.app.models.schema import (
     AuditEvent,
     BankLine,
     CloseRun,
+    GLAccount,
     Invoice,
     JournalEntry,
     JournalLine,
@@ -72,8 +74,18 @@ def seed_period_data(session: Session, run_id: str, period: str, seed: int) -> N
         session.merge(acc)
     records = data.get(period, data.get("2026-08", []))
     tiers: dict[int, list] = {}
-    prio = {CloseRun: 1, Payout: 2, BankLine: 3, SettlementEvent: 4, Invoice: 5, JournalEntry: 6, JournalLine: 7}
+    prio = {
+        CloseRun: 1,
+        Payout: 2,
+        BankLine: 3,
+        SettlementEvent: 4,
+        Invoice: 5,
+        JournalEntry: 6,
+        JournalLine: 7,
+    }
     for _rtype, rec in records:
+        if isinstance(rec, GLAccount):
+            continue  # CoA already merged above
         if type(rec) in prio and getattr(rec, "run_id", None) is not None:
             setattr(rec, "run_id", run_id)
         if isinstance(rec, CloseRun):
@@ -165,14 +177,23 @@ def run_close(session: Session, run: CloseRun) -> list[dict]:
         )
 
     if blocked:
-        _emit(timeline, "await_human", "Close BLOCKED: proof failure requires ruling", counters=counters)
+        _emit(
+            timeline,
+            "await_human",
+            "Close BLOCKED: proof failure requires ruling",
+            counters=counters,
+        )
         run.status = "blocked"
     else:
         _emit(timeline, "reprove", "Re-proved after remedies", counters=counters)
         _emit(timeline, "package", "Period closed; audit package ready", counters=counters)
         run.status = "closed"
-    run.metrics = {**(run.metrics or {}), "timeline": timeline, "counters": counters,
-                   "proofs": [{"obligation": r.id, "passed": r.passed} for r in results]}
+    run.metrics = {
+        **(run.metrics or {}),
+        "timeline": timeline,
+        "counters": counters,
+        "proofs": [{"obligation": r.id, "passed": r.passed} for r in results],
+    }
     session.add(
         AuditEvent(
             id=f"ae_{uuid.uuid4().hex[:8]}",

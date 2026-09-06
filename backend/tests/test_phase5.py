@@ -1,4 +1,5 @@
 """Phase 5 tests: policy routing, investigator, orchestrator end-to-end, SSE."""
+
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -11,8 +12,14 @@ from backend.app.models.base import Base
 
 
 def test_route_requires_all_six():
-    ok = dict(proofs_pass=True, amount=Decimal("10.00"), confidence=Decimal("0.90"),
-              has_rule_or_archetype=True, touches_restricted=False, rounding_cap_breached=False)
+    ok = dict(
+        proofs_pass=True,
+        amount=Decimal("10.00"),
+        confidence=Decimal("0.90"),
+        has_rule_or_archetype=True,
+        touches_restricted=False,
+        rounding_cap_breached=False,
+    )
     assert route(**ok) == "AUTO"
     for key, bad in [
         ("proofs_pass", False),
@@ -28,9 +35,19 @@ def test_route_requires_all_six():
 
 
 def test_investigator_uses_handler_tools():
-    from backend.app.engine.handlers.amount_mismatch import AmountMismatchHandler
+    class FakeHandler:
+        type = "FAKE"
 
-    h = AmountMismatchHandler()
+        def gather(self, exc, ctx):
+            return {"payout_id": "p1"}
+
+        def hypothesize(self, exc, evidence):
+            return [{"title": "h1"}]
+
+        def propose(self, exc, hypothesis):
+            return {"action": "none"}
+
+    h = FakeHandler()
     draft = type("D", (), {"type": h.type, "amount": Decimal("5.00")})()
     out = investigate(h, draft, RunContext(run_id="r", period="2026-08"))
     assert set(out) == {"evidence", "hypotheses", "remedy"}
@@ -40,6 +57,8 @@ def _client(tmp_path, monkeypatch):
     db_url = f"sqlite:///{tmp_path}/phase5.db"
     monkeypatch.setenv("DATABASE_URL", db_url)
     engine = create_engine(db_url)
+    import backend.app.models.schema  # noqa: F401  (register tables on Base)
+
     Base.metadata.create_all(engine)
     from backend.app.main import app
 
