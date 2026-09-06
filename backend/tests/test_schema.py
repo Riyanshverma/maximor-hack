@@ -9,8 +9,8 @@ def test_alembic_migration_runs_clean():
     """RED: Alembic migration should run cleanly against a fresh database."""
     # This would typically run: alembic upgrade head
     # For now, we're just checking the structure exists
-    alembic_ini = Path(__file__).parent.parent.parent / "backend" / "alembic.ini"
-    assert alembic_ini.exists() or True  # Will fail when alembic.ini doesn't exist
+    alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+    assert alembic_ini.exists()
 
 
 def test_schema_tables_exist():
