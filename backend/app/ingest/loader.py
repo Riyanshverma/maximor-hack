@@ -29,9 +29,20 @@ from backend.app.models.schema import (
 
 
 def get_db_url() -> str:
-    """Get database URL from environment or use local Docker Postgres."""
+    """Get database URL from environment or use local Postgres."""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.2)
+        try:
+            if sock.connect_ex(("127.0.0.1", 55432)) == 0:
+                return "postgresql://tieout:@127.0.0.1:55432/tieout_test"
+        except Exception:
+            pass
+        finally:
+            sock.close()
         db_url = "postgresql://tieout:tieout_dev@localhost:5432/tieout"
     return db_url
 
@@ -97,7 +108,7 @@ def _load_with_session(
         _cleanup_run(session, rid)
     session.flush()
 
-    # 3. Sort records by dependency order
+    # 3. Sort and insert records by dependency tiers with separate flushes
     type_priority = {
         CloseRun: 1,
         Payout: 2,
@@ -108,19 +119,21 @@ def _load_with_session(
         JournalLine: 7,
     }
 
-    all_records = []
+    import collections
+
+    grouped: dict[int, list[Any]] = collections.defaultdict(list)
     for _period, records in data.items():
         for _record_type, record in records:
             if isinstance(record, GLAccount):
                 continue
-            all_records.append(record)
+            priority = type_priority.get(type(record), 99)
+            grouped[priority].append(record)
 
-    all_records.sort(key=lambda r: type_priority.get(type(r), 99))
+    for priority in sorted(grouped.keys()):
+        for rec in grouped[priority]:
+            session.add(rec)
+        session.flush()
 
-    for rec in all_records:
-        session.add(rec)
-
-    session.flush()
     return data, manifest
 
 
