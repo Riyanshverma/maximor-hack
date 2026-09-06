@@ -102,13 +102,13 @@ All proofs are pure functions (`evaluate(ctx: RunContext) → ProofResult`), blo
 `backend/app/engine/proofs/p4.py` — every settled payout must tie out to exactly one matching bank deposit. Bank deposits typically post within a week of payout settlement. Catches unmatched payouts and timing misalignment. Test: clean period passes; unmatched payout fixture fails.
 
 ### P5: Revenue Completeness
-`backend/app/engine/proofs/p5.py` — validates that all recognized revenue events have been journalized with corresponding GL accounts. Ensures no revenue leakage. Test: clean period passes; missing journal entry fixture fails.
+`backend/app/engine/proofs/p5.py` — sums recognized revenue from settlement events (payments, refunds, disputes in native currency) and compares against total invoiced amount. Must match exactly for the period to close. Test: clean period passes; revenue-mismatch fixture fails.
 
 ### P6: No Orphans
-`backend/app/engine/proofs/p6.py` — refund whose original charge is not in scope (refund with payment_id not present in current or prior loaded period). Detects orphaned refunds. Test: clean period passes; orphaned-refund fixture fails.
+`backend/app/engine/proofs/p6.py` — every SettlementEvent must map to exactly one JournalLine via settlement_event_id. Catches missing mappings (unmapped events), duplicate mappings (one event linked twice), and dangling mappings (journal lines referencing non-existent events). Test: clean period passes; orphaned/duplicate mapping fixture fails.
 
 ### Payout Decomposition Matcher
-`backend/app/engine/matcher.py` — decomposes payout header into component settlement events and matches them to bank lines. Routes ambiguous entries to the Classifier (LLM) for account assignment.
+`backend/app/engine/matcher.py` — groups settlement events by payout_id (`decompose_payout()`) and matches payouts to bank lines with exact-amount (zero tolerance) matching within a ±3-day date window (`match_bank_lines()`). Ambiguous or unmatched pairs are left unmapped.
 
 ### Test Coverage
 - **test_p1.py** — P1 proofs (clean + off-by-one-cent failure)
@@ -140,17 +140,19 @@ Implement seven MVP exception handlers from `docs/02-exception-taxonomy.md` (mar
 1. A fixture that triggers the handler and exercises its detect → gather → hypothesize → propose flow
 2. A near-miss fixture that deliberately should NOT trigger
 
-### The Seven MVP Exception Handlers
+### The Seven MVP Exception Handlers (types 1, 2, 3, 6, 11, 12, 13)
 
-| Type | Detect | Evidence | Auto If | Escalate If |
-|------|--------|----------|---------|------------|
-| **AMOUNT_MISMATCH** | Sum of breakup-details ≠ payout.net | entry list, payout header, per-entry FX rate | delta ≤ $1.00, attributable to pro-rating → 7490 | delta > $1.00 or cap consumed |
-| **FX_VARIANCE** | Effective FX rate outside expected band | entry rate, historical range, payment method | explainable by method/geography mix | unexplained variance |
-| **DISPUTE_LIFECYCLE_INCOMPLETE** | Dispute without matching resolution | dispute entry, linked payment, prior periods | dispute found in prior closed period → reverse | dispute never resolved |
-| **DUPLICATE_CHARGE** | Same customer, same amount, same date, within 24h | charge entries, customer, timestamp, amount | duplicate detected, merge to single entry, net refund → 7899 | cannot merge (conflicting GL post) |
-| **MISSING_INVOICE** | Charge with no matching invoice found | charge, customer_id, invoice lookup, prior periods | found in prior period → cross-period note | not found anywhere |
-| **TIMING_CUTOFF** | Event occurred just before period end; settlement posted just after | event timestamp, settlement timestamp, period boundary | timing explainable by standard lag → post with note | lag exceeds SLA |
-| **POLICY_VIOLATION** | Charge to a restricted GL account (e.g. suspended customer) | charge, GL account, restriction flag | human approval required (no auto) | escalate to compliance |
+From `docs/02-exception-taxonomy.md`:
+
+| # | Type | Purpose |
+|---|------|---------|
+| 1 | **AMOUNT_MISMATCH** | Sum of breakup-details entries ≠ payout.net (catches pro-rating errors) |
+| 2 | **FX_VARIANCE** | Effective FX rate outside expected band for payment method/geography |
+| 3 | **DISPUTE_LIFECYCLE_INCOMPLETE** | Dispute without matching resolution (caught before close) |
+| 6 | **TIMING_CUTOFF** | Event occurred just before period end; settlement posted just after (standard lag detection) |
+| 11 | **BANK_UNMATCHED** | Settled payout has no exact-amount (+/-$0.00), in-window (±3-day) bank deposit match |
+| 12 | **LOW_CONFIDENCE_CLASSIFICATION** | Ambiguous entry classified with confidence score < 0.85 (LLM judgment uncertain) |
+| 13 | **POLICY_VIOLATION** | Charge to a restricted GL account (e.g., suspended customer, compliance holds) |
 
 ### Implementation Pattern
 Each handler is a module under `backend/app/engine/handlers/` (e.g., `amount_mismatch.py`). Each implements the `ExceptionHandler` protocol:
@@ -255,5 +257,4 @@ Scope:
 ---
 
 **Last updated:** 2026-09-06  
-**By:** Claude Code (AO implementation worker)  
-**Contact:** n.gupta@dynamicorestrategies.co.in
+**By:** Claude Code (AO implementation worker)
