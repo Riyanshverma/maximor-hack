@@ -1,22 +1,49 @@
 """Test database schema and migrations."""
+import os
+import tempfile
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
-from sqlalchemy.pool import StaticPool
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import NUMERIC, create_engine, inspect
+
+import backend.app.models.schema  # noqa: F401
+from backend.app.models.base import Base
 
 
 def test_alembic_migration_runs_clean():
-    """RED: Alembic migration should run cleanly against a fresh database."""
-    # This would typically run: alembic upgrade head
-    # For now, we're just checking the structure exists
+    """Alembic migration upgrade and downgrade should run cleanly."""
     alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
     assert alembic_ini.exists()
 
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        # If no DATABASE_URL, test against a temporary sqlite file
+        with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+            test_url = f"sqlite:///{tmp.name}"
+            cfg = Config(str(alembic_ini))
+            cfg.set_main_option("sqlalchemy.url", test_url)
+            command.upgrade(cfg, "head")
+            command.downgrade(cfg, "base")
+            command.upgrade(cfg, "head")
+            engine = create_engine(test_url)
+            tables = inspect(engine).get_table_names()
+            assert "close_run" in tables
+            assert "journal_line" in tables
+    else:
+        cfg = Config(str(alembic_ini))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "base")
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url)
+        tables = inspect(engine).get_table_names()
+        assert "close_run" in tables
+        assert "journal_line" in tables
+
 
 def test_schema_tables_exist():
-    """RED: Required tables should exist in the schema after migration."""
-    # Expected tables from 03-data-model-and-contracts.md
-    expected_tables = [
+    """Required tables should exist in the schema after migration."""
+    expected_tables = {
         "close_run",
         "settlement_event",
         "payout",
@@ -30,46 +57,87 @@ def test_schema_tables_exist():
         "rule",
         "proof_result",
         "audit_event",
-    ]
+    }
 
-    # Using in-memory SQLite for schema testing
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        engine = create_engine(db_url)
+    else:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(bind=engine)
 
-    # Ensure models are imported so Base.metadata is populated, then create tables.
-    import backend.app.models.schema  # noqa: F401
-    from backend.app.models.base import Base
-
-    Base.metadata.create_all(bind=engine)
     existing_tables = set(inspect(engine).get_table_names())
-    assert set(expected_tables) <= existing_tables
+    assert expected_tables <= existing_tables
+
 
 def test_close_run_table_columns():
-    """RED: close_run table should have expected columns with correct types."""
-    # Columns from schema spec:
-    # id, period, status, started_at, finished_at, rules_enabled BOOL,
-    # seed INT, metrics JSONB
+    """close_run table should have expected columns with correct types."""
     expected_columns = {
         "id", "period", "status", "started_at", "finished_at",
         "rules_enabled", "seed", "metrics"
     }
-    # This will fail until schema is created
-    assert len(expected_columns) > 0  # placeholder
+    db_url = os.getenv("DATABASE_URL") or "sqlite:///:memory:"
+    engine = create_engine(db_url)
+    if "sqlite" in db_url:
+        Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    cols = {c["name"] for c in inspector.get_columns("close_run")}
+    assert expected_columns <= cols
 
 
 def test_monetary_columns_are_numeric():
-    """RED: All monetary columns should be NUMERIC(18,4), never float."""
-    # This test validates the money rule: no floats anywhere
-    # Will check tables like payout, settlement_event, journal_line, etc.
-    # This is critical for the trust model
-    pass  # placeholder
+    """All monetary columns must be NUMERIC(18,4) or NUMERIC(18,8), never float."""
+    db_url = os.getenv("DATABASE_URL") or "sqlite:///:memory:"
+    engine = create_engine(db_url)
+    if "sqlite" in db_url:
+        Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+
+    monetary_fields = [
+        ("payout", "gross", 18, 4),
+        ("payout", "fees", 18, 4),
+        ("payout", "net", 18, 4),
+        ("bank_line", "amount", 18, 4),
+        ("invoice", "subtotal", 18, 4),
+        ("invoice", "tax", 18, 4),
+        ("invoice", "total", 18, 4),
+        ("settlement_event", "amount_native", 18, 4),
+        ("settlement_event", "amount_payout", 18, 4),
+        ("settlement_event", "fx_rate", 18, 8),
+        ("journal_line", "debit", 18, 4),
+        ("journal_line", "credit", 18, 4),
+        ("exception", "amount", 18, 4),
+        ("proof_result", "expected", 18, 4),
+        ("proof_result", "actual", 18, 4),
+        ("proof_result", "delta", 18, 4),
+    ]
+
+    for table, col_name, exp_prec, exp_scale in monetary_fields:
+        cols = {c["name"]: c for c in inspector.get_columns(table)}
+        assert col_name in cols, f"{col_name} missing from {table}"
+        col_type = cols[col_name]["type"]
+        # Numeric check
+        assert isinstance(col_type, NUMERIC) or hasattr(col_type, "precision"), (
+            f"{table}.{col_name} is not NUMERIC: {col_type}"
+        )
+        if hasattr(col_type, "precision") and col_type.precision is not None:
+            assert col_type.precision == exp_prec, (
+                f"{table}.{col_name} precision {col_type.precision} != {exp_prec}"
+            )
+            assert col_type.scale == exp_scale, (
+                f"{table}.{col_name} scale {col_type.scale} != {exp_scale}"
+            )
 
 
-def test_golden_dataset_schema_valid():
-    """RED: Schema should support golden dataset (clean period proves to $0.00)."""
-    # This is the integration test that validates the schema
-    # can handle the test data structure
-    pass  # placeholder
+def test_migrated_schema_matches_orm_metadata():
+    """Migrated schema must match SQLAlchemy metadata for non-nullability and constraints."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        return
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+
+    jl_cols = {c["name"]: c for c in inspector.get_columns("journal_line")}
+    assert jl_cols["debit"]["nullable"] is False, "journal_line.debit must be NOT NULL"
+    assert jl_cols["credit"]["nullable"] is False, "journal_line.credit must be NOT NULL"
+

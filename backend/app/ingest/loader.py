@@ -18,7 +18,7 @@ def get_db_url() -> str:
     import os
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        db_url = "postgresql://tieout_user:tieout_pass@localhost:5432/tieout_db"
+        db_url = "postgresql://tieout:tieout_dev@localhost:5432/tieout"
     return db_url
 
 
