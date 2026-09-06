@@ -39,10 +39,13 @@ def test_schema_tables_exist():
         poolclass=StaticPool,
     )
 
-    # This test will fail until we create the schema
-    # For now, we're declaring what should exist
-    assert len(expected_tables) > 0  # placeholder
+    # Ensure models are imported so Base.metadata is populated, then create tables.
+    from backend.app.models.base import Base
+    import backend.app.models.schema  # noqa: F401
 
+    Base.metadata.create_all(bind=engine)
+    existing_tables = set(inspect(engine).get_table_names())
+    assert set(expected_tables) <= existing_tables
 
 def test_close_run_table_columns():
     """RED: close_run table should have expected columns with correct types."""
