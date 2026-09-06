@@ -1,1 +1,1 @@
-"""Exception handlers (taxonomy types 1-14)."""
+"""Exception handlers (Phase 4)."""
