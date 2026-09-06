@@ -1,4 +1,6 @@
 """FastAPI application entry point for TieOut close orchestrator."""
+from typing import Optional
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -50,7 +52,7 @@ async def get_proofs(run_id: str):
 
 # GET /runs/{id}/exceptions — exception register
 @app.get("/runs/{run_id}/exceptions")
-async def get_exceptions(run_id: str, status: str | None = None):
+async def get_exceptions(run_id: str, status: Optional[str] = None):
     """Get exceptions for a run, optionally filtered by status."""
     return []
 
@@ -83,7 +85,7 @@ async def get_journal_entries(run_id: str):
 
 # GET /rules — all learned rules
 @app.get("/rules")
-async def get_rules(run_id: str = None):
+async def get_rules(run_id: Optional[str] = None):
     """Get all learned rules, optionally filtered by run."""
     return []
 
