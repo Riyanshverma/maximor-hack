@@ -135,7 +135,52 @@ $$\text{Opening Balance (0.00)} + \sum \text{debits}_{1310} - \sum \text{credits
 
 ---
 
-## Phase 4 — Exception handlers (NOT STARTED)
+## Phase 4 — Exception handlers (DONE — all 7 MVP handlers implemented, sqlite-verified)
+
+### Scope
+Implement seven MVP exception handlers from `docs/02-exception-taxonomy.md` (marked `priority="must"`). Each handler ships with:
+1. A fixture that triggers the handler and exercises its detect → gather → hypothesize → propose flow
+2. A near-miss fixture that deliberately should NOT trigger
+
+### The Seven MVP Exception Handlers (types 1, 2, 3, 6, 11, 12, 13)
+
+From `docs/02-exception-taxonomy.md`:
+
+| # | Type | Purpose | Module | Status |
+|---|------|---------|--------|--------|
+| 1 | **AMOUNT_MISMATCH** | Sum of breakup-details entries ≠ payout.net (catches pro-rating errors) | `handlers/amount_mismatch.py` | ✅ done |
+| 2 | **FX_VARIANCE** | Effective FX rate outside expected band for payment method/geography | `handlers/fx_variance.py` | ✅ done |
+| 3 | **DISPUTE_LIFECYCLE_INCOMPLETE** | Dispute without matching resolution (caught before close) | `handlers/dispute_lifecycle.py` | ✅ done |
+| 6 | **TIMING_CUTOFF** | Event occurred just before period end; settlement posted just after (standard lag detection) | `handlers/timing_cutoff.py` | ✅ done (this session) |
+| 11 | **BANK_UNMATCHED** | Settled payout has no exact-amount (+/-$0.00), in-window (±3-day) bank deposit match | `handlers/bank_unmatched.py` | ✅ done |
+| 12 | **LOW_CONFIDENCE_CLASSIFICATION** | Ambiguous entry classified with confidence score < 0.85 (LLM judgment uncertain) | `handlers/low_confidence_classification.py` | ✅ done (this session) |
+| 13 | **POLICY_VIOLATION** | Charge to a restricted GL account (e.g., suspended customer, compliance holds) | `handlers/policy_violation.py` | ✅ done |
+
+### Wiring
+`backend/app/engine/handlers/__init__.py` exports `HANDLERS` (all 7, in taxonomy
+build order) and `HANDLER_TYPES` for orchestrator/registry use.
+
+### Design notes (this session)
+- **TIMING_CUTOFF:** detect = `created_at` vs `settled_at` in different YYYY-MM
+  periods. Propose = AUTO `in_transit_split` via 1330↔1310 under $250
+  materiality, else ESCALATE. Rule shape: `cutoff_policy(days_tolerance) → in-transit split`.
+- **LOW_CONFIDENCE_CLASSIFICATION:** no classifier-confidence column exists in the
+  schema, so detection reads classifier output from
+  `settlement_event.raw.classification.confidence` (`< 0.85` triggers; missing or
+  `≥ 0.85` is a near-miss). Never auto-resolves; always ESCALATE. Rule shape:
+  `classification_precedent(event_signature) → account`. If a dedicated
+  classifier-output table/column is added later, point this handler at it.
+
+### Test results (this session, 2026-09-07)
+- New: `test_timing_cutoff.py` (6 tests), `test_low_confidence_classification.py` (6 tests)
+- Full suite: **156 passed** (`backend/tests/`, incl. `test_golden.py` 7/7) via
+  `uv run --with pytest pytest backend/tests/` — all on SQLite in-memory.
+- `ruff check backend/` — clean.
+- ⚠️ **Postgres verification NOT done:** `docker` socket permission denied in this
+  environment (`/var/run/docker.sock`, user not in `docker` group), so
+  `docker compose up -d postgres` could not run. Handler tests are DB-agnostic
+  (injected sessions) and golden tests passed on SQLite, but a Postgres run
+  (`alembic upgrade head` + full suite against PG) is still required before merge.
 
 ### Scope
 Implement seven MVP exception handlers from `docs/02-exception-taxonomy.md` (marked `priority="must"`). Each handler ships with:
@@ -258,5 +303,5 @@ Scope:
 
 ---
 
-**Last updated:** 2026-09-06  
-**By:** Claude Code (AO implementation worker)
+**Last updated:** 2026-09-07
+**By:** AO implementation worker (local-only; no push, no PR)
