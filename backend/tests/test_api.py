@@ -84,6 +84,8 @@ def test_post_runs_valid_json_creates_run(tmp_path, monkeypatch):
     db_url = f"sqlite:///{tmp_path}/api_test.db"
     monkeypatch.setenv("DATABASE_URL", db_url)
     engine = create_engine(db_url)
+    import backend.app.models.schema  # noqa: F401  (register tables on Base)
+
     Base.metadata.create_all(engine)
 
     client = TestClient(app)
@@ -95,7 +97,9 @@ def test_post_runs_valid_json_creates_run(tmp_path, monkeypatch):
     data = response.json()
     assert "run_id" in data
     assert data["period"] == "2026-08"
-    assert data["status"] == "in_progress"
+    # Phase 5: POST /runs executes the close pipeline synchronously,
+    # so the run lands terminal (blocked on proof failure, or closed).
+    assert data["status"] in ("blocked", "closed")
 
 
 def test_post_runs_invalid_period_returns_422():
