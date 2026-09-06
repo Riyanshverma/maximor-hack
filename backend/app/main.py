@@ -1,4 +1,6 @@
 """FastAPI application entry point for TieOut close orchestrator."""
+import asyncio
+import json
 import uuid
 from typing import Optional
 
@@ -54,10 +56,12 @@ class ResolveExceptionRequest(BaseModel):
         return v
 
 
-# POST /runs — start a close run
+# POST /runs — start a close run (full Phase 5 pipeline: seed -> match -> prove -> investigate -> route)
 @app.post("/runs", status_code=status.HTTP_200_OK)
 async def post_runs(payload: CreateRunRequest):
-    """Start a close run for a period."""
+    """Start a close run for a period (runs the orchestrator synchronously)."""
+    from backend.app.engine.orchestrator import run_close
+
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     engine = create_engine(get_db_url())
     with Session(engine) as session:
@@ -69,13 +73,17 @@ async def post_runs(payload: CreateRunRequest):
             seed=payload.seed,
         )
         session.add(run)
+        session.flush()
+        timeline = run_close(session, run)
         session.commit()
+        status_val = run.status
     return {
         "run_id": run_id,
         "period": payload.period,
-        "status": "in_progress",
+        "status": status_val,
         "rules_enabled": payload.rules_enabled,
         "seed": payload.seed,
+        "phases": [e["phase"] for e in timeline],
     }
 
 
@@ -107,8 +115,14 @@ async def stream_run(run_id: str):
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     async def event_generator():
-        data_bytes = f'{{"phase": "ingest", "run_id": "{run_id}", "status": "started"}}'.encode()
-        yield b'event: message\ndata: ' + data_bytes + b'\n\n'
+        metrics = run.metrics or {}
+        timeline = metrics.get("timeline") or [
+            {"phase": "ingest", "run_id": run_id, "status": "started"}
+        ]
+        for event in timeline:
+            payload = json.dumps({"run_id": run_id, **event})
+            yield f"event: {event.get('phase', 'message')}\ndata: {payload}\n\n"
+            await asyncio.sleep(0.01)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
