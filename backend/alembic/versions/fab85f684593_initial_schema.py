@@ -170,11 +170,13 @@ def upgrade() -> None:
     op.create_index(op.f('ix_human_ruling_exception_id'), 'human_ruling', ['exception_id'], unique=False)
 
     # Add deferred cyclic foreign key from rule.source_ruling_id to human_ruling.id
-    op.create_foreign_key(
-        'fk_rule_source_ruling_id',
-        'rule', 'human_ruling',
-        ['source_ruling_id'], ['id']
-    )
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        op.create_foreign_key(
+            'fk_rule_source_ruling_id',
+            'rule', 'human_ruling',
+            ['source_ruling_id'], ['id']
+        )
 
     # 4. Journal entries and lines
     op.create_table(
@@ -249,7 +251,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # 1. Drop cyclic foreign keys
-    op.drop_constraint('fk_rule_source_ruling_id', 'rule', type_='foreignkey')
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        op.drop_constraint('fk_rule_source_ruling_id', 'rule', type_='foreignkey')
 
     # 2. Drop tables in reverse dependency order
     op.drop_index(op.f('ix_journal_line_entry_id'), table_name='journal_line')

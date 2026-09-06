@@ -1,5 +1,5 @@
 """Database schema models for TieOut."""
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
@@ -11,7 +11,9 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    event,
 )
+from sqlalchemy.orm import attributes
 
 from backend.app.models.base import Base
 
@@ -213,4 +215,27 @@ class AuditEvent(Base):
     subject_type = Column(String(50), nullable=False)
     subject_id = Column(String(36), nullable=False)
     payload = Column(JSON, nullable=True)
-    at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+@event.listens_for(Exception, "before_update")
+def _validate_ground_truth_key_write_once(mapper, connection, target):
+    history = attributes.get_history(target, "ground_truth_key")
+    if history.has_changes():
+        old_val = history.deleted[0] if history.deleted else None
+        new_val = history.added[0] if history.added else None
+        if old_val is not None and old_val != new_val:
+            raise ValueError(
+                "ground_truth_key is write-once and cannot be modified after creation."
+            )
+
+
+@event.listens_for(AuditEvent, "before_update")
+def _prevent_audit_event_update(mapper, connection, target):
+    raise ValueError("audit_event is append-only and cannot be updated.")
+
+
+@event.listens_for(AuditEvent, "before_delete")
+def _prevent_audit_event_delete(mapper, connection, target):
+    raise ValueError("audit_event is append-only and cannot be deleted.")
+

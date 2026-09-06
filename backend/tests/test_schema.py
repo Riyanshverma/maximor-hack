@@ -141,3 +141,98 @@ def test_migrated_schema_matches_orm_metadata():
     assert jl_cols["debit"]["nullable"] is False, "journal_line.debit must be NOT NULL"
     assert jl_cols["credit"]["nullable"] is False, "journal_line.credit must be NOT NULL"
 
+
+def test_audit_event_append_only():
+    """AuditEvent is append-only: updates and deletes must be rejected."""
+    import pytest
+    from sqlalchemy.orm import Session
+
+    from backend.app.models.schema import AuditEvent, CloseRun
+
+    db_url = os.getenv("DATABASE_URL") or "sqlite:///:memory:"
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine)
+
+    with Session(engine) as session:
+        run = CloseRun(id="run_audit_test", period="2026-08", status="ingest")
+        session.merge(run)
+        session.flush()
+        evt = AuditEvent(
+            id="audit_test_1",
+            run_id="run_audit_test",
+            actor="system",
+            action="test_created",
+            subject_type="payout",
+            subject_id="po_123",
+            payload={"action": "test"},
+        )
+        session.add(evt)
+        session.commit()
+
+    with Session(engine) as session:
+        fetched = session.get(AuditEvent, "audit_test_1")
+        assert fetched is not None
+        fetched.actor = "human"
+        with pytest.raises(ValueError, match="audit_event is append-only and cannot be updated"):
+            session.commit()
+        session.rollback()
+
+    with Session(engine) as session:
+        fetched = session.get(AuditEvent, "audit_test_1")
+        assert fetched is not None
+        session.delete(fetched)
+        with pytest.raises(ValueError, match="audit_event is append-only and cannot be deleted"):
+            session.commit()
+        session.rollback()
+
+
+def test_exception_ground_truth_key_write_once():
+    """Exception.ground_truth_key is write-once and cannot be changed once set."""
+    from decimal import Decimal
+
+    import pytest
+    from sqlalchemy.orm import Session
+
+    from backend.app.models.schema import CloseRun
+    from backend.app.models.schema import Exception as ExceptionModel
+
+    db_url = os.getenv("DATABASE_URL") or "sqlite:///:memory:"
+    engine = create_engine(db_url)
+    Base.metadata.create_all(bind=engine)
+
+    with Session(engine) as session:
+        run = CloseRun(id="run_gt_test", period="2026-08", status="ingest")
+        session.merge(run)
+        exc = ExceptionModel(
+            id="exc_gt_test",
+            run_id="run_gt_test",
+            type="AMOUNT_MISMATCH",
+            status="open",
+            severity="medium",
+            amount=Decimal("10.00"),
+            currency="USD",
+            confidence=Decimal("0.9500"),
+            detected_by="detector",
+            ground_truth_key="gt_AMOUNT_MISMATCH_2026-08",
+        )
+        session.add(exc)
+        session.commit()
+
+    # Allowed: updating non-ground_truth fields
+    with Session(engine) as session:
+        fetched = session.get(ExceptionModel, "exc_gt_test")
+        assert fetched is not None
+        fetched.status = "investigating"
+        session.commit()
+        assert fetched.status == "investigating"
+
+    # Forbidden: updating ground_truth_key
+    with Session(engine) as session:
+        fetched = session.get(ExceptionModel, "exc_gt_test")
+        assert fetched is not None
+        fetched.ground_truth_key = "gt_AMOUNT_MISMATCH_tampered"
+        with pytest.raises(ValueError, match="ground_truth_key is write-once"):
+            session.commit()
+        session.rollback()
+
+
